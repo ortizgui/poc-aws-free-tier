@@ -116,7 +116,7 @@ Para remover todos os recursos:
 
 ```bash
 aws cloudformation delete-stack \
-  --stack-name poc-static-website
+  --stack-name poc-aws-free-tier
 ```
 
 ## 📊 Monitoramento
