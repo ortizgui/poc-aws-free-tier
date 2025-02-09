@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  POC AWS: Página web estática, API Gateway, Lambda e CloudFront.
+  O template cria os recursos de infraestrutura e configura o S3 para website hosting.
+  O arquivo HTML (index.html) deverá ser enviado separadamente para o bucket.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+    Description: Ambiente de implantação
+
+Resources:
+  ##############################################
+  # Lambda que retorna a mensagem de sucesso
+  ##############################################
+  PocLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  PocLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt PocLambdaExecutionRole.Arn
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {
+                      "Content-Type": "application/json",
+                      "Access-Control-Allow-Origin": "*"
+                  },
+                  "body": '{"message": "Success"}'
+              }
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##############################################
+  # API Gateway integrando com o Lambda
+  ##############################################
+  PocApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "POC-API-${Environment}"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  PocApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt PocApi.RootResourceId
+      PathPart: poc
+      RestApiId: !Ref PocApi
+
+  PocApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PocApi
+      ResourceId: !Ref PocApiResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PocLambda.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  PocLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PocLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PocApi}/*/GET/poc"
+
+  PocApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: PocApiMethod
+    Properties:
+      RestApiId: !Ref PocApi
+
+  PocApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId: !Ref PocApiDeployment
+      RestApiId: !Ref PocApi
+      StageName: !Ref Environment
+
+  ##############################################
+  # Bucket S3 para hospedar o site estático
+  ##############################################
+  StaticWebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-${Environment}-static-website"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  StaticWebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticWebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${StaticWebsiteBucket}/*"
+
+  ##############################################
+  # Distribuição CloudFront para o site
+  ##############################################
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Distribuição para ${AWS::StackName}-${Environment}"
+        Enabled: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !Sub "${StaticWebsiteBucket}.s3-website-${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          DefaultTTL: 3600
+          MaxTTL: 86400
+          MinTTL: 0
+          Compress: true
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        PriceClass: PriceClass_100
+        HttpVersion: http2
+        IPV6Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  WebsiteURL:
+    Description: URL da CloudFront para acessar o site
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontURL"
+
+  ApiUrl:
+    Description: URL da API Gateway (rota /poc)
+    Value: !Sub "https://${PocApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/poc"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiURL"
+
+  BucketName:
+    Description: Nome do bucket S3
+    Value: !Ref StaticWebsiteBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketName"

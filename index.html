@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>POC AWS</title>
+  </head>
+  <body>
+    <h1>POC AWS - API Gateway + Lambda</h1>
+    <button id="actionBtn">Acionar API</button>
+    <div id="response"></div>
+    <script>
+      document.getElementById('actionBtn').addEventListener('click', function() {
+        // ATENÇÃO: Atualize a URL abaixo com o endpoint correto da API Gateway,
+        // conforme exibido no Output "ApiUrl" do CloudFormation.
+        fetch('https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/poc')
+          .then(response => response.json())
+          .then(data => {
+            document.getElementById('response').innerText = data.message;
+          })
+          .catch(err => {
+            document.getElementById('response').innerText = 'Erro: ' + err;
+          });
+      });
+    </script>
+  </body>
+</html>
